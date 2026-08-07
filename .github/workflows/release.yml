@@ -1,0 +1,226 @@
+name: Promote SyncTV suite
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - releases/*.yml
+      - releases/*.yaml
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: Release manifest path
+        required: true
+        type: string
+
+concurrency:
+  group: synctv-suite-promotion
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    name: Promote component releases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    environment: release
+    env:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+    steps:
+      - name: Check out release repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select release manifest
+        id: selected
+        shell: bash
+        env:
+          DISPATCH_MANIFEST: ${{ inputs.manifest || '' }}
+          BEFORE_SHA: ${{ github.event.before || '' }}
+        run: |
+          if [[ -n "$DISPATCH_MANIFEST" ]]; then
+            manifest="$DISPATCH_MANIFEST"
+          else
+            if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+              mapfile -t manifests < <(
+                git diff-tree --root --no-commit-id --diff-filter=A --name-only -r \
+                  "$GITHUB_SHA" -- 'releases/*.yml' 'releases/*.yaml'
+              )
+            else
+              mapfile -t manifests < <(
+                git diff --diff-filter=A --name-only "$BEFORE_SHA" "$GITHUB_SHA" -- \
+                  'releases/*.yml' 'releases/*.yaml'
+              )
+            fi
+            if [[ "${#manifests[@]}" -ne 1 ]]; then
+              echo "Expected one added release manifest, found ${#manifests[@]}." >&2
+              exit 1
+            fi
+            manifest="${manifests[0]}"
+          fi
+
+          if [[ ! "$manifest" =~ ^releases/[0-9]{4}\.[0-9]{2}\.[0-9]+\.ya?ml$ ]]; then
+            echo "Invalid release manifest path: $manifest" >&2
+            exit 1
+          fi
+          test -f "$manifest"
+          source_commit="$(git log --diff-filter=A --format=%H -1 -- "$manifest")"
+          if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve the commit that added $manifest." >&2
+            exit 1
+          fi
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+          echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Validate and read manifest
+        id: manifest
+        run: ruby script/manifest github-output "${{ steps.selected.outputs.manifest }}"
+
+      - name: Create cross-repository installation token
+        id: app-token
+        if: ${{ env.RELEASE_APP_ID != '' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            synctv
+            synctv-app
+            synctv-release
+
+      - name: Preflight component commits and versions
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN }}
+          BACKEND_REPOSITORY: ${{ steps.manifest.outputs.backend_repository }}
+          BACKEND_COMMIT: ${{ steps.manifest.outputs.backend_commit }}
+          BACKEND_VERSION: ${{ steps.manifest.outputs.backend_version }}
+          BACKEND_TAG: ${{ steps.manifest.outputs.backend_tag }}
+          APP_REPOSITORY: ${{ steps.manifest.outputs.app_repository }}
+          APP_COMMIT: ${{ steps.manifest.outputs.app_commit }}
+          APP_VERSION: ${{ steps.manifest.outputs.app_version }}
+          APP_BUILD_NUMBER: ${{ steps.manifest.outputs.app_build_number }}
+          APP_TAG: ${{ steps.manifest.outputs.app_tag }}
+        run: scripts/preflight.sh
+
+      - name: Create component release tags
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN }}
+        run: |
+          scripts/create_component_tag.sh \
+            "${{ steps.manifest.outputs.backend_repository }}" \
+            "${{ steps.manifest.outputs.backend_tag }}" \
+            "${{ steps.manifest.outputs.backend_commit }}" \
+            "${{ steps.manifest.outputs.suite_version }}" &
+          backend_pid=$!
+
+          scripts/create_component_tag.sh \
+            "${{ steps.manifest.outputs.app_repository }}" \
+            "${{ steps.manifest.outputs.app_tag }}" \
+            "${{ steps.manifest.outputs.app_commit }}" \
+            "${{ steps.manifest.outputs.suite_version }}" &
+          app_pid=$!
+
+          backend_status=0
+          app_status=0
+          wait "$backend_pid" || backend_status=$?
+          wait "$app_pid" || app_status=$?
+          if ((backend_status != 0 || app_status != 0)); then
+            printf 'Tag creation failed: backend=%s app=%s\n' \
+              "$backend_status" "$app_status" >&2
+            exit 1
+          fi
+
+      - name: Wait for server Release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN }}
+        run: >-
+          scripts/wait_for_workflow.sh
+          "${{ steps.manifest.outputs.backend_repository }}"
+          release.yml
+          "${{ steps.manifest.outputs.backend_tag }}"
+          "${{ steps.manifest.outputs.backend_commit }}"
+
+      - name: Wait for server image
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN }}
+        run: >-
+          scripts/wait_for_workflow.sh
+          "${{ steps.manifest.outputs.backend_repository }}"
+          docker.yml
+          "${{ steps.manifest.outputs.backend_tag }}"
+          "${{ steps.manifest.outputs.backend_commit }}"
+
+      - name: Read published server image digest
+        id: image
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN }}
+          BACKEND_REPOSITORY: ${{ steps.manifest.outputs.backend_repository }}
+          BACKEND_TAG: ${{ steps.manifest.outputs.backend_tag }}
+        run: |
+          gh release download "$BACKEND_TAG" \
+            --repo "$BACKEND_REPOSITORY" \
+            --pattern image-digest.txt \
+            --output image-digest.txt
+          digest="$(tr -d '[:space:]' < image-digest.txt)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Backend release published an invalid image digest: $digest" >&2
+            exit 1
+          }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for app Release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN }}
+        run: >-
+          scripts/wait_for_workflow.sh
+          "${{ steps.manifest.outputs.app_repository }}"
+          release.yml
+          "${{ steps.manifest.outputs.app_tag }}"
+          "${{ steps.manifest.outputs.app_commit }}"
+
+      - name: Generate immutable release lock
+        env:
+          BACKEND_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          RELEASE_SOURCE_SHA: ${{ steps.selected.outputs.source_commit }}
+        run: |
+          mkdir -p dist
+          RELEASED_AT="$(git show -s --format=%cI "$RELEASE_SOURCE_SHA")"
+          export RELEASED_AT
+          ruby script/manifest lock "${{ steps.selected.outputs.manifest }}" dist/release-lock.yml
+          (cd dist && sha256sum release-lock.yml > SHA256SUMS)
+
+      - name: Publish suite Release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN }}
+          SUITE_VERSION: ${{ steps.manifest.outputs.suite_version }}
+          SUITE_TAG: ${{ steps.manifest.outputs.suite_tag }}
+          RELEASE_CHANNEL: ${{ steps.manifest.outputs.release_channel }}
+          BACKEND_REPOSITORY: ${{ steps.manifest.outputs.backend_repository }}
+          BACKEND_TAG: ${{ steps.manifest.outputs.backend_tag }}
+          BACKEND_VERSION: ${{ steps.manifest.outputs.backend_version }}
+          BACKEND_IMAGE: ${{ steps.manifest.outputs.backend_image }}
+          BACKEND_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          BACKEND_CHART: ${{ steps.manifest.outputs.backend_chart }}
+          APP_REPOSITORY: ${{ steps.manifest.outputs.app_repository }}
+          APP_TAG: ${{ steps.manifest.outputs.app_tag }}
+          RELEASE_SOURCE_SHA: ${{ steps.selected.outputs.source_commit }}
+        run: scripts/publish_suite_release.sh dist
+
+      - name: Add app downloads to server Release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN }}
+          BACKEND_REPOSITORY: ${{ steps.manifest.outputs.backend_repository }}
+          BACKEND_TAG: ${{ steps.manifest.outputs.backend_tag }}
+          BACKEND_DOCS_URL: https://docs.syncs.tv
+          APP_REPOSITORY: ${{ steps.manifest.outputs.app_repository }}
+          APP_TAG: ${{ steps.manifest.outputs.app_tag }}
+          APP_VERSION: ${{ steps.manifest.outputs.app_version }}
+          APP_BUILD_NUMBER: ${{ steps.manifest.outputs.app_build_number }}
+          SUITE_TAG: ${{ steps.manifest.outputs.suite_tag }}
+        run: scripts/update_backend_release.sh
