@@ -14,9 +14,8 @@ run_id=""
 while (( $(date +%s) < deadline )); do
   run_json="$(
     gh api --method GET "repos/$repository/actions/workflows/$workflow/runs" \
-      -f event=push \
       -f branch="$tag" \
-      -F per_page=20 \
+      -F per_page=100 \
       --jq ".workflow_runs | map(select(.head_sha == \"$commit\")) | sort_by(.created_at) | last // empty"
   )"
 
@@ -44,4 +43,3 @@ done
 printf 'Timed out waiting for %s %s after %s seconds. Last run: %s\n' \
   "$repository" "$workflow" "$timeout_seconds" "${run_id:-unavailable}" >&2
 exit 1
-
