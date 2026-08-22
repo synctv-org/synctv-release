@@ -35,7 +35,8 @@ suite Release record. It performs no Rust or Flutter compilation.
 2. Set each component to a full 40-character commit SHA.
 3. Set versions and tags to the metadata already committed at those SHAs.
 4. Confirm the server commit's `synctv-web-ui/web-ui.toml` pins the same App
-   repository and commit as the manifest.
+   repository and commit as the manifest. Its production `revision` must equal
+   that full commit SHA.
 5. Commit the manifest directly to `main` and wait for `Validate release manifests`.
 6. Approve the `release` Environment when approval is configured.
 

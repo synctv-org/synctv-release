@@ -29,9 +29,22 @@ class WebUiPinTest < Minitest::Test
     assert verify(<<~TOML)
       kind = "git"
       repository = "git@github.com:synctv-org/synctv-app.git"
-      revision = "refs/tags/v1.2.3"
+      revision = "#{COMMIT}"
       commit = "#{COMMIT}"
     TOML
+  end
+
+  def test_rejects_a_floating_production_revision
+    error = assert_raises(ArgumentError) do
+      verify(<<~TOML)
+        kind = "git"
+        repository = "https://github.com/synctv-org/synctv-app.git"
+        revision = "refs/tags/v1.2.3"
+        commit = "#{COMMIT}"
+      TOML
+    end
+
+    assert_includes error.message, "revision must equal its pinned commit"
   end
 
   def test_rejects_non_git_source
@@ -61,12 +74,13 @@ class WebUiPinTest < Minitest::Test
   end
 
   def test_rejects_commit_mismatch
+    mismatched_commit = "a" * 40
     error = assert_raises(ArgumentError) do
       verify(<<~TOML)
         kind = "git"
         repository = "https://github.com/synctv-org/synctv-app.git"
-        revision = "#{COMMIT}"
-        commit = "#{"a" * 40}"
+        revision = "#{mismatched_commit}"
+        commit = "#{mismatched_commit}"
       TOML
     end
 

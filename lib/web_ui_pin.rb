@@ -20,6 +20,10 @@ class WebUiPin
 
     commit = source.fetch("commit")
     raise ArgumentError, "Web UI commit must be a full lowercase SHA" unless COMMIT.match?(commit)
+    revision = source.fetch("revision")
+    unless revision == commit
+      raise ArgumentError, "Web UI production revision must equal its pinned commit"
+    end
     return true if commit == expected_commit
 
     raise ArgumentError, "Web UI commit #{commit} differs from #{expected_commit}"
