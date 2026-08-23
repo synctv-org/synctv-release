@@ -54,10 +54,10 @@ download_file "$BACKEND_REPOSITORY" "$BACKEND_COMMIT" docs/package-lock.json "$t
 download_file "$BACKEND_REPOSITORY" "$BACKEND_COMMIT" docs/src/lib/project.ts "$tmp_dir/project.ts"
 download_file "$BACKEND_REPOSITORY" "$BACKEND_COMMIT" docker-compose.yml "$tmp_dir/docker-compose.yml"
 download_file "$BACKEND_REPOSITORY" "$BACKEND_COMMIT" helm/synctv/README.md "$tmp_dir/helm-readme.md"
-download_file "$BACKEND_REPOSITORY" "$BACKEND_COMMIT" synctv-web-ui/web-ui.toml "$tmp_dir/web-ui.toml"
+download_file "$BACKEND_REPOSITORY" "$BACKEND_COMMIT" synctv-web-ui/web-ui.production.toml "$tmp_dir/web-ui.production.toml"
 download_file "$APP_REPOSITORY" "$APP_COMMIT" pubspec.yaml "$tmp_dir/pubspec.yaml"
 
-ruby script/verify-web-ui-pin "$tmp_dir/web-ui.toml" "$APP_REPOSITORY" "$APP_COMMIT"
+ruby script/verify-web-ui-pin "$tmp_dir/web-ui.production.toml" "$APP_REPOSITORY" "$APP_COMMIT"
 
 cargo_version="$(ruby -e '
   text = File.read(ARGV.fetch(0))

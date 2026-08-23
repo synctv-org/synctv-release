@@ -3,7 +3,7 @@
 ## Normal release
 
 1. Prepare final version commits in both component repositories. The server's
-   `synctv-web-ui/web-ui.toml` must pin the final App commit in both `revision`
+   `synctv-web-ui/web-ui.production.toml` must pin the final App commit in both `revision`
    and `commit`.
 2. Add one `releases/YYYY.MM.PATCH.yml` manifest and commit it directly to `main`.
 3. Review the `Validate release manifests` result.
