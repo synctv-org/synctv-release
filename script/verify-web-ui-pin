@@ -1,0 +1,17 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require_relative "../lib/web_ui_pin"
+
+begin
+  config = ARGV.fetch(0) { abort "usage: verify-web-ui-pin CONFIG REPOSITORY COMMIT" }
+  repository = ARGV.fetch(1) { abort "usage: verify-web-ui-pin CONFIG REPOSITORY COMMIT" }
+  commit = ARGV.fetch(2) { abort "usage: verify-web-ui-pin CONFIG REPOSITORY COMMIT" }
+  abort "usage: verify-web-ui-pin CONFIG REPOSITORY COMMIT" unless ARGV.length == 3
+
+  WebUiPin.verify!(config, expected_repository: repository, expected_commit: commit)
+  puts "Web UI pins #{repository}@#{commit}."
+rescue ArgumentError => error
+  warn error.message
+  exit 1
+end
