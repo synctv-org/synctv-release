@@ -1,0 +1,21 @@
+schema_version: 1
+
+release:
+  version: "2026.11.01"
+  channel: stable
+
+components:
+  backend:
+    repository: synctv-org/synctv
+    commit: 68c45482e2082495bd2565207c989f47d27f2df8
+    version: 1.0.8
+    tag: v1.0.8
+    image: ghcr.io/synctv-org/synctv
+    chart: oci://ghcr.io/synctv-org/synctv/charts/synctv
+
+  app:
+    repository: synctv-org/synctv-app
+    commit: a8d7c287d06ff1d7b753730c2dcbee5d2ed5e8e3
+    version: 1.1.28
+    build_number: 27
+    tag: v1.1.28
